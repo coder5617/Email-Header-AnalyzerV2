@@ -33,10 +33,14 @@ def run_streamlit():
     """Run the Streamlit web application"""
     import subprocess
     import sys
+    from pathlib import Path
+
+    # Use absolute path for the Streamlit app
+    app_path = str(Path(__file__).parent / "src" / "email_header_analyzer" / "ui" / "streamlit_app.py")
     
     cmd = [
         sys.executable, "-m", "streamlit", "run",
-        "src/email_header_analyzer/ui/streamlit_app.py",
+        app_path,
         "--server.port=8501",
         "--server.address=0.0.0.0",
         "--server.headless=true",
