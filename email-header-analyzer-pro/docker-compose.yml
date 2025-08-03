@@ -1,0 +1,50 @@
+version: "3.8"
+
+services:
+  email-analyzer:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: email-header-analyzer-pro
+    ports:
+      - "8501:8501"
+    environment:
+      - PYTHONPATH=/app/src
+    env_file:
+      - .env
+    volumes:
+      # Persistent data storage
+      - ./data:/app/data
+      - ./logs:/app/logs  
+      - ./reports:/app/reports
+      # Configuration persistence
+      - ./.env:/app/.env:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
+    networks:
+      - email-analyzer-network
+
+networks:
+  email-analyzer-network:
+    driver: bridge
+    
+volumes:
+  email-analyzer-data:
+    driver: local
+  email-analyzer-logs:
+    driver: local
+  email-analyzer-reports:
+    driver: local
