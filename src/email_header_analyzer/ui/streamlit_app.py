@@ -1,16 +1,16 @@
 """
 Enhanced Streamlit application with modern UI and comprehensive analysis
 """
-
 import streamlit as st
+import logging
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+import io
 import json
-import base64
-import logging
+from datetime import datetime, timedelta
 from typing import Dict, Any, List
+import psutil
 
 # Configure page
 st.set_page_config(
@@ -21,6 +21,7 @@ st.set_page_config(
 )
 
 # Setup logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Import our enhanced modules
@@ -188,8 +189,6 @@ def main():
                         format_func=lambda x: f"{recent_analyses[x].from_address} - {recent_analyses[x].subject[:50]}..."
                     )
                     if st.button("Load Selected"):
-                        # Load the analysis results
-                        st.info("Historical analysis loaded. Analysis results will be displayed below.")
                         display_analysis_results(recent_analyses[selected_analysis].analysis_results)
                         return
                 else:
@@ -361,7 +360,7 @@ def display_analysis_results(results: Dict[str, Any]):
         display_authentication_tab(results.get('authentication', {}))
     
     with tab3:
-        display_geographic_tab(results.get('geographic', {}))
+        display_geographic_tab(results.get('geographic', {}), results.get('routing', {}))
     
     with tab4:
         display_spoofing_tab(results.get('spoofing', {}))
@@ -584,7 +583,7 @@ def display_authentication_tab(auth_data: Dict[str, Any]):
             else:
                 st.error("❌ DKIM Not Aligned")
 
-def display_geographic_tab(geo_data: Dict[str, Any]):
+def display_geographic_tab(geo_data: Dict[str, Any], routing_data: Dict[str, Any]):
     """Display geographic analysis tab"""
     
     if not geo_data:
@@ -613,6 +612,7 @@ def display_geographic_tab(geo_data: Dict[str, Any]):
         st.subheader("📍 IP Address Analysis")
         
         # Create routing table
+        hops = routing_data.get('hops', [])
         hop_data = []
         for hop in hops:
             hop_data.append({
@@ -633,454 +633,8 @@ def display_geographic_tab(geo_data: Dict[str, Any]):
             for hop in suspicious_hops:
                 with st.expander(f"Hop {hop.get('index', 0) + 1}: {hop.get('from_ip', 'Unknown')}"):
                     st.code(hop.get('raw', 'No raw data'), language='text')
-
-def display_content_tab(content_data: Dict[str, Any]):
-    """Display content analysis tab"""
-    
-    if not content_data:
-        st.warning("No content data available")
-        return
-    
-    st.subheader("📄 Content Analysis")
-    
-    # Subject analysis
-    subject_analysis = content_data.get('subject_analysis', {})
-    if subject_analysis:
-        st.markdown("### 📧 Subject Line Analysis")
         
-        subject = subject_analysis.get('subject', '')
-        st.write(f"**Subject:** {subject}")
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            length = subject_analysis.get('length', 0)
-            st.metric("Length", f"{length} chars")
-        
-        with col2:
-            risk_score = content_data.get('risk_score', 0)
-            st.metric("Risk Score", f"{risk_score}/100")
-        
-        with col3:
-            patterns = len(subject_analysis.get('suspicious_patterns', []))
-            st.metric("Suspicious Patterns", patterns)
-        
-        # Suspicious patterns
-        suspicious_patterns = subject_analysis.get('suspicious_patterns', [])
-        if suspicious_patterns:
-            st.warning("⚠️ Suspicious Patterns Detected:")
-            for pattern in suspicious_patterns:
-                st.write(f"• {pattern}")
-    
-    # Social engineering analysis
-    social_eng = content_data.get('social_engineering', {})
-    if social_eng and social_eng.get('categories_detected'):
-        st.markdown("### 🧠 Social Engineering Analysis")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write("**Tactics Detected:**")
-            for category in social_eng['categories_detected']:
-                st.write(f"• {category.title()}")
-        
-        with col2:
-            primary_tactic = social_eng.get('primary_tactic')
-            if primary_tactic:
-                st.write(f"**Primary Tactic:** {primary_tactic.title()}")
-            
-            overall_score = social_eng.get('overall_score', 0)
-            st.metric("SE Score", f"{overall_score}/100")
-
-def display_reports_tab(results: Dict[str, Any]):
-    """Display reports generation tab"""
-    
-    st.subheader("📈 Generate Reports")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("### 📊 Export Options")
-        
-        report_format = st.selectbox(
-            "Report Format",
-            ["PDF", "HTML", "JSON", "CSV"],
-            help="Choose the output format for your report"
-        )
-        
-        include_raw = st.checkbox("Include Raw Headers", value=False)
-        include_charts = st.checkbox("Include Charts", value=True)
-        
-        if st.button("📥 Generate Report", type="primary"):
-            try:
-                # Generate report
-                report_data = st.session_state.report_generator.generate_report(
-                    results, 
-                    format=report_format.lower(),
-                    include_raw=include_raw,
-                    include_charts=include_charts
-                )
-                
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                
-                if report_format == "PDF":
-                    st.download_button(
-                        "📥 Download PDF Report",
-                        data=report_data,
-                        file_name=f"email_analysis_{timestamp}.pdf",
-                        mime="application/pdf"
-                    )
-                elif report_format == "HTML":
-                    st.download_button(
-                        "📥 Download HTML Report",
-                        data=report_data,
-                        file_name=f"email_analysis_{timestamp}.html",
-                        mime="text/html"
-                    )
-                elif report_format == "JSON":
-                    st.download_button(
-                        "📥 Download JSON Report",
-                        data=json.dumps(results, indent=2, default=str),
-                        file_name=f"email_analysis_{timestamp}.json",
-                        mime="application/json"
-                    )
-                elif report_format == "CSV":
-                    csv_data = convert_results_to_csv(results)
-                    st.download_button(
-                        "📥 Download CSV Report",
-                        data=csv_data,
-                        file_name=f"email_analysis_{timestamp}.csv",
-                        mime="text/csv"
-                    )
-                
-                st.success("✅ Report generated successfully!")
-                
-            except Exception as e:
-                st.error(f"❌ Report generation failed: {str(e)}")
-                logger.error(f"Report generation error: {e}", exc_info=True)
-    
-    with col2:
-        st.markdown("### 📋 Report Preview")
-        
-        # Generate quick summary for preview
-        summary_data = {
-            "Analysis Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "Overall Risk Score": calculate_overall_risk(results),
-            "Risk Level": config.get_risk_level(calculate_overall_risk(results)),
-            "Authentication Score": results.get('authentication', {}).get('overall_score', 0),
-            "Issues Found": sum(len(section.get('issues', [])) for section in results.values() if isinstance(section, dict))
-        }
-        
-        for key, value in summary_data.items():
-            st.write(f"**{key}:** {value}")
-
-def display_historical_section():
-    """Display historical analysis section"""
-    
-    st.subheader("📚 Historical Analysis")
-    
-    # Tabs for different views
-    hist_tab1, hist_tab2, hist_tab3 = st.tabs(["Recent Analysis", "Search History", "Statistics"])
-    
-    with hist_tab1:
-        st.markdown("### 🕐 Recent Analyses")
-        
-        recent_analyses = database.get_recent_analyses(limit=10)
-        if recent_analyses:
-            # Create DataFrame for display
-            hist_data = []
-            for analysis in recent_analyses:
-                hist_data.append({
-                    'Date': analysis.timestamp.strftime('%Y-%m-%d %H:%M') if analysis.timestamp else 'Unknown',
-                    'From': analysis.from_address or 'Unknown',
-                    'Subject': analysis.subject[:50] + '...' if analysis.subject and len(analysis.subject) > 50 else analysis.subject or 'No Subject',
-                    'Risk Level': analysis.risk_level or 'Unknown',
-                    'Risk Score': analysis.risk_score or 0
-                })
-            
-            df = pd.DataFrame(hist_data)
-            
-            # Display with color coding
-            def highlight_risk(row):
-                if row['Risk Level'] == 'HIGH':
-                    return ['background-color: #ffebee'] * len(row)
-                elif row['Risk Level'] == 'MEDIUM':
-                    return ['background-color: #fff3e0'] * len(row)
-                elif row['Risk Level'] == 'LOW':
-                    return ['background-color: #e8f5e8'] * len(row)
-                return [''] * len(row)
-            
-            st.dataframe(
-                df.style.apply(highlight_risk, axis=1),
-                use_container_width=True
-            )
-        else:
-            st.info("No historical analyses found.")
-    
-    with hist_tab2:
-        st.markdown("### 🔍 Search Analysis History")
-        
-        # Search filters
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            search_from = st.text_input("From Address", placeholder="sender@example.com")
-        
-        with col2:
-            risk_filter = st.selectbox("Risk Level", ["All", "HIGH", "MEDIUM", "LOW"])
-        
-        with col3:
-            date_range = st.date_input(
-                "Date Range",
-                value=(datetime.now() - timedelta(days=30), datetime.now()),
-                max_value=datetime.now()
-            )
-        
-        if st.button("🔍 Search"):
-            if search_from:
-                search_results = database.get_analyses_by_sender(search_from)
-                if search_results:
-                    st.success(f"Found {len(search_results)} analyses for {search_from}")
-                    
-                    # Display search results
-                    search_data = []
-                    for analysis in search_results:
-                        search_data.append({
-                            'Date': analysis.timestamp.strftime('%Y-%m-%d %H:%M') if analysis.timestamp else 'Unknown',
-                            'Subject': analysis.subject[:50] + '...' if analysis.subject and len(analysis.subject) > 50 else analysis.subject or 'No Subject',
-                            'Risk Level': analysis.risk_level or 'Unknown',
-                            'Risk Score': analysis.risk_score or 0
-                        })
-                    
-                    search_df = pd.DataFrame(search_data)
-                    st.dataframe(search_df, use_container_width=True)
-                else:
-                    st.info("No analyses found for the specified criteria.")
-            else:
-                st.warning("Please enter a sender address to search.")
-    
-    with hist_tab3:
-        st.markdown("### 📊 Analysis Statistics")
-        
-        stats = database.get_statistics()
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("Total Analyses", stats.get("total_analyses", 0))
-            st.metric("Recent (7 days)", stats.get("recent_analyses", 0))
-        
-        with col2:
-            st.metric("Cached IPs", stats.get("cached_ips", 0))
-            st.metric("Cached Domains", stats.get("cached_domains", 0))
-        
-        with col3:
-            # Risk distribution chart
-            risk_dist = stats.get("risk_distribution", {})
-            if risk_dist:
-                fig = px.pie(
-                    values=list(risk_dist.values()),
-                    names=list(risk_dist.keys()),
-                    title="Risk Level Distribution",
-                    color_discrete_map={
-                        'HIGH': '#dc3545',
-                        'MEDIUM': '#fd7e14', 
-                        'LOW': '#28a745'
-                    }
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("No risk distribution data available yet.")
-
-def calculate_overall_risk(results: Dict[str, Any]) -> int:
-    """Calculate overall risk score from analysis results"""
-    scores = []
-    
-    # Authentication score (inverted - lower auth score = higher risk)
-    auth_score = results.get('authentication', {}).get('overall_score', 0)
-    scores.append(100 - auth_score)
-    
-    # Spoofing score
-    spoof_score = results.get('spoofing', {}).get('risk_score', 0)
-    scores.append(spoof_score)
-    
-    # Content analysis score
-    content_score = results.get('content', {}).get('risk_score', 0)
-    scores.append(content_score)
-    
-    # Geographic risks
-    geo_issues = len(results.get('geographic', {}).get('issues', []))
-    geo_score = min(geo_issues * 20, 100)
-    scores.append(geo_score)
-    
-    # Routing risks
-    routing_issues = len(results.get('routing', {}).get('issues', []))
-    routing_score = min(routing_issues * 15, 100)
-    scores.append(routing_score)
-    
-    # Calculate weighted average
-    if scores:
-        return int(sum(scores) / len(scores))
-    return 0
-
-def convert_results_to_csv(results: Dict[str, Any]) -> str:
-    """Convert analysis results to CSV format"""
-    import io
-    
-    output = io.StringIO()
-    
-    # Write summary data
-    output.write("Email Header Analysis Report\n")
-    output.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-    
-    # Overall metrics
-    output.write("Overall Analysis\n")
-    output.write("Metric,Value\n")
-    output.write(f"Overall Risk Score,{calculate_overall_risk(results)}\n")
-    output.write(f"Risk Level,{config.get_risk_level(calculate_overall_risk(results))}\n")
-    
-    # Authentication data
-    auth_data = results.get('authentication', {})
-    if auth_data:
-        output.write("\nAuthentication Analysis\n")
-        output.write("Component,Status,Score,Result\n")
-        
-        spf = auth_data.get('spf', {})
-        output.write(f"SPF,{spf.get('status', 'unknown')},{spf.get('score', 0)},{spf.get('result', 'unknown')}\n")
-        
-        dkim = auth_data.get('dkim', {})
-        output.write(f"DKIM,{dkim.get('status', 'unknown')},{dkim.get('score', 0)},{len(dkim.get('domains', []))}\n")
-        
-        dmarc = auth_data.get('dmarc', {})
-        output.write(f"DMARC,{dmarc.get('status', 'unknown')},{dmarc.get('score', 0)},{dmarc.get('result', 'unknown')}\n")
-    
-    # Geographic data
-    geo_data = results.get('geographic', {})
-    if geo_data and geo_data.get('analysis'):
-        output.write("\nGeographic Analysis\n")
-        output.write("IP Address,Country,City,ISP,Risk Score,Blacklisted\n")
-        
-        for ip, analysis in geo_data['analysis'].items():
-            geo_info = analysis.get('geographic', {})
-            blacklist_info = analysis.get('blacklists', {})
-            
-            output.write(f"{ip},{geo_info.get('country', 'Unknown')},{geo_info.get('city', 'Unknown')},"
-                        f"{geo_info.get('isp', 'Unknown')},{analysis.get('risk_score', 0)},"
-                        f"{blacklist_info.get('is_blacklisted', False)}\n")
-    
-    # Issues and recommendations
-    summary = results.get("summary", {})
-    
-    if summary.get("critical_issues"):
-        output.write("\nCritical Issues\n")
-        output.write("Issue\n")
-        for issue in summary["critical_issues"]:
-            output.write(f"{issue}\n")
-    
-    if summary.get("recommendations"):
-        output.write("\nRecommendations\n")
-        output.write("Recommendation\n")
-        for rec in summary["recommendations"]:
-            output.write(f"{rec}\n")
-    
-    return output.getvalue()
-
-def get_sample_headers() -> str:
-    """Return sample email headers for testing"""
-    return """Return-Path: <marketing@example.com>
-Received: from mail.example.com ([203.0.113.10]) by mx.recipient.com with ESMTP id ABC123; Mon, 1 Jan 2024 12:00:00 +0000
-Received: from webmail.example.com ([192.168.1.100]) by mail.example.com; Mon, 1 Jan 2024 11:59:45 +0000
-From: "Marketing Team" <marketing@example.com>
-To: user@recipient.com
-Subject: Monthly Newsletter - Important Updates
-Date: Mon, 1 Jan 2024 12:00:00 +0000
-Message-ID: <newsletter-123@example.com>
-DKIM-Signature: v=1; a=rsa-sha256; d=example.com; s=selector1; h=from:to:subject:date; b=ABC123...
-Authentication-Results: mx.recipient.com; spf=pass smtp.mailfrom=example.com; dkim=pass header.d=example.com; dmarc=pass
-Content-Type: text/html; charset=UTF-8
-X-Originating-IP: [203.0.113.10]"""
-
-def show_api_configuration_help():
-    """Show API configuration help in sidebar"""
-    with st.expander("🔧 API Setup Help"):
-        st.markdown("""
-        **Free API Keys Available:**
-        
-        **IPInfo.io** (Geographic data)
-        - 50,000 requests/month free
-        - Sign up: https://ipinfo.io/signup
-        
-        **AbuseIPDB** (IP reputation)  
-        - 1,000 requests/day free
-        - Sign up: https://www.abuseipdb.com/api
-        
-        **VirusTotal** (Threat intelligence)
-        - 4 requests/minute free
-        - Sign up: https://www.virustotal.com/gui/join-us
-        
-        Add keys to `.env` file and restart application.
-        """)
-
-def show_system_status():
-    """Show system status information"""
-    with st.expander("🖥️ System Status"):
-        # Database status
-        try:
-            stats = database.get_statistics()
-            st.write(f"**Database:** ✅ Connected")
-            st.write(f"**Records:** {stats.get('total_analyses', 0)}")
-        except Exception as e:
-            st.write(f"**Database:** ❌ Error - {str(e)}")
-        
-        # API status
-        api_status = api_manager.get_service_status()
-        for service, status in api_status.items():
-            if status['api_key_configured']:
-                st.write(f"**{service.title()}:** ✅ Configured")
-            else:
-                st.write(f"**{service.title()}:** ⚠️ No API key")
-        
-        # Memory usage (if psutil is available)
-        try:
-            import psutil
-            memory = psutil.virtual_memory()
-            st.write(f"**Memory:** {memory.percent}% used")
-        except ImportError:
-            pass
-
-def handle_error_gracefully(func, *args, **kwargs):
-    """Wrapper to handle errors gracefully in Streamlit"""
-    try:
-        return func(*args, **kwargs)
-    except Exception as e:
-        st.error(f"An error occurred: {str(e)}")
-        st.info("Please check the logs for more details.")
-        logger.error(f"Streamlit error in {func.__name__}: {e}", exc_info=True)
-        return None
-
-def setup_session_state():
-    """Initialize session state variables"""
-    if 'analysis_history' not in st.session_state:
-        st.session_state.analysis_history = []
-    
-    if 'current_analysis' not in st.session_state:
-        st.session_state.current_analysis = None
-    
-    if 'api_usage_today' not in st.session_state:
-        st.session_state.api_usage_today = {
-            'ipinfo': 0,
-            'abuseipdb': 0, 
-            'virustotal': 0
-        }
-
-if __name__ == "__main__":
-    # Setup logging
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
-    
-    try:
-        main()
-    except Exception as e:
-        st.error(f"Failed to start application: {str(e)}")
-        logger.error(f"Application startup failed: {e}", exc_info=True) DataFrame for display
+        # IP Analysis Table
         ip_data = []
         for ip, analysis in analysis_data.items():
             geo_info = analysis.get('geographic', {})
@@ -1374,32 +928,36 @@ def display_reports_tab(results: Dict[str, Any]):
                 
                 if report_format == "PDF":
                     st.download_button(
-                        "📥 Download PDF Report",
+                        label="📥 Download PDF Report",
                         data=report_data,
                         file_name=f"email_analysis_{timestamp}.pdf",
-                        mime="application/pdf"
+                        mime="application/pdf",
+                        key="pdf_download"
                     )
                 elif report_format == "HTML":
                     st.download_button(
-                        "📥 Download HTML Report",
+                        label="📥 Download HTML Report",
                         data=report_data,
                         file_name=f"email_analysis_{timestamp}.html",
-                        mime="text/html"
+                        mime="text/html",
+                        key="html_download"
                     )
                 elif report_format == "JSON":
                     st.download_button(
-                        "📥 Download JSON Report",
+                        label="📥 Download JSON Report",
                         data=json.dumps(results, indent=2, default=str),
                         file_name=f"email_analysis_{timestamp}.json",
-                        mime="application/json"
+                        mime="application/json",
+                        key="json_download"
                     )
                 elif report_format == "CSV":
                     csv_data = convert_results_to_csv(results)
                     st.download_button(
-                        "📥 Download CSV Report",
+                        label="📥 Download CSV Report",
                         data=csv_data,
                         file_name=f"email_analysis_{timestamp}.csv",
-                        mime="text/csv"
+                        mime="text/csv",
+                        key="csv_download"
                     )
                 
                 st.success("✅ Report generated successfully!")
@@ -1494,6 +1052,13 @@ def display_historical_section():
                     # Display search results
                     search_data = []
                     for analysis in search_results:
+                        if risk_filter != "All" and analysis.risk_level != risk_filter:
+                            continue
+                        if isinstance(date_range, tuple) and len(date_range) == 2:
+                            start_date, end_date = date_range
+                            if analysis.timestamp:
+                                if not (start_date <= analysis.timestamp.date() <= end_date):
+                                    continue
                         search_data.append({
                             'Date': analysis.timestamp.strftime('%Y-%m-%d %H:%M') if analysis.timestamp else 'Unknown',
                             'Subject': analysis.subject[:50] + '...' if analysis.subject and len(analysis.subject) > 50 else analysis.subject or 'No Subject',
@@ -1501,10 +1066,13 @@ def display_historical_section():
                             'Risk Score': analysis.risk_score or 0
                         })
                     
-                    search_df = pd.DataFrame(search_data)
-                    st.dataframe(search_df, use_container_width=True)
+                    if search_data:
+                        search_df = pd.DataFrame(search_data)
+                        st.dataframe(search_df, use_container_width=True)
+                    else:
+                        st.info("No analyses found for the specified criteria.")
                 else:
-                    st.info("No analyses found for the specified criteria.")
+                    st.info("No analyses found for the specified sender.")
             else:
                 st.warning("Please enter a sender address to search.")
     
@@ -1574,8 +1142,6 @@ def calculate_overall_risk(results: Dict[str, Any]) -> int:
 
 def convert_results_to_csv(results: Dict[str, Any]) -> str:
     """Convert analysis results to CSV format"""
-    import io
-    
     output = io.StringIO()
     
     # Write summary data
@@ -1689,46 +1255,17 @@ def show_system_status():
             else:
                 st.write(f"**{service.title()}:** ⚠️ No API key")
         
-        # Memory usage (if psutil is available)
+        # Memory usage
         try:
-            import psutil
             memory = psutil.virtual_memory()
             st.write(f"**Memory:** {memory.percent}% used")
         except ImportError:
-            pass
-
-def handle_error_gracefully(func, *args, **kwargs):
-    """Wrapper to handle errors gracefully in Streamlit"""
-    try:
-        return func(*args, **kwargs)
-    except Exception as e:
-        st.error(f"An error occurred: {str(e)}")
-        st.info("Please check the logs for more details.")
-        logger.error(f"Streamlit error in {func.__name__}: {e}", exc_info=True)
-        return None
-
-def setup_session_state():
-    """Initialize session state variables"""
-    if 'analysis_history' not in st.session_state:
-        st.session_state.analysis_history = []
-    
-    if 'current_analysis' not in st.session_state:
-        st.session_state.current_analysis = None
-    
-    if 'api_usage_today' not in st.session_state:
-        st.session_state.api_usage_today = {
-            'ipinfo': 0,
-            'abuseipdb': 0, 
-            'virustotal': 0
-        }
+            st.warning("⚠️ psutil not installed - memory usage unavailable")
 
 if __name__ == "__main__":
-    # Setup logging
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
-    
     try:
         main()
     except Exception as e:
         st.error(f"Failed to start application: {str(e)}")
         logger.error(f"Application startup failed: {e}", exc_info=True)
+        sys.exit(1)

@@ -422,7 +422,7 @@ class EnhancedSpoofingDetector:
         # Character substitution
         char_substitutions = {
             'o': '0', '0': 'o', 'l': '1', '1': 'l', 'i': '1',
-            'e': '3', 'a': '@', 's': ', 'g': '9'
+            'e': '3', 'a': '@', 's': '$', 'g': '9'
         }
         
         for original, substitute in char_substitutions.items():

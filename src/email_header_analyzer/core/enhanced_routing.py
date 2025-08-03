@@ -6,6 +6,7 @@ import re
 import logging
 from typing import Any, Dict, List, Optional
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from email_header_analyzer.utils.ip_helper import extract_ip_from_received, is_private_ip, is_valid_ipv4
 
 logger = logging.getLogger(__name__)
@@ -22,11 +23,6 @@ class EnhancedRoutingAnalyzer:
             r'172\.(1[6-9]|2[0-9]|3[0-1])\.',
             r'unknown',
             r'none'
-        ]
-        
-        self.legitimate_internal_keywords = [
-            'internal', 'corp', 'company', 'office', 'local',
-            'exchange', 'mail', 'smtp', 'mx'
         ]
     
     def analyze(self, headers: Dict[str, Any]) -> Dict[str, Any]:
@@ -130,7 +126,7 @@ class EnhancedRoutingAnalyzer:
                         hop["by_ip"] = potential_ip
             
             # Extract timestamp
-            timestamp_match = re.search(r';\s*(.+), header)
+            timestamp_match = re.search(r';\s*(.+)$', header)
             if timestamp_match:
                 hop["timestamp"] = self._parse_timestamp(timestamp_match.group(1).strip())
             
@@ -164,7 +160,6 @@ class EnhancedRoutingAnalyzer:
     def _parse_timestamp(self, timestamp_str: str) -> Optional[datetime]:
         """Parse timestamp from Received header"""
         try:
-            from email.utils import parsedate_to_datetime
             return parsedate_to_datetime(timestamp_str)
         except Exception as e:
             logger.debug(f"Failed to parse timestamp '{timestamp_str}': {e}")
@@ -426,5 +421,7 @@ class EnhancedRoutingAnalyzer:
             "risk_level": "HIGH" if risk_score > 70 else "MEDIUM" if risk_score > 40 else "LOW",
             "has_private_ips": any(hop.get("from_ip") and is_private_ip(hop["from_ip"]) for hop in hops),
             "has_timing_issues": any("timestamp" in str(hop.get("issues", [])).lower() for hop in hops),
-            "routing_complexity": "HIGH" if len(hops) > 10 else "MEDIUM" if len(hops) > 6 else "LOW"
+            "routing_complexity": "HIGH" if len(hops) > 10 else "MEDIUM" if len(hops) > 6 else "LOW",
+            "issues": issues,
+            "suspicious_hops": suspicious_hops
         }
