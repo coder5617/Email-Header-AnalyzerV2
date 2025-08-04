@@ -8,9 +8,17 @@ import plotly.express as px
 import plotly.graph_objects as go
 import io
 import json
-from datetime import datetime, timedelta
-from typing import Dict, Any, List
-import psutil
+import sys
+import traceback
+from datetime import datetime, timedelta, date
+from typing import Dict, Any, List, Union, Tuple
+from pathlib import Path
+
+# Add src directory to Python path if needed
+current_dir = Path(__file__).parent
+src_dir = current_dir.parent.parent.parent / "src"
+if str(src_dir) not in sys.path:
+    sys.path.insert(0, str(src_dir))
 
 # Configure page
 st.set_page_config(
@@ -24,12 +32,25 @@ st.set_page_config(
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Import our enhanced modules
-from email_header_analyzer.config import config
-from email_header_analyzer.database import database, AnalysisRecord
-from email_header_analyzer.core.enhanced_parser import EnhancedEmailHeaderParser
-from email_header_analyzer.external_apis import api_manager
-from email_header_analyzer.utils.report_generator import ReportGenerator
+# Import our enhanced modules with error handling
+try:
+    from email_header_analyzer.config import config
+    from email_header_analyzer.database import database, AnalysisRecord
+    from email_header_analyzer.core.enhanced_parser import EnhancedEmailHeaderParser
+    from email_header_analyzer.external_apis import api_manager
+    from email_header_analyzer.utils.report_generator import ReportGenerator
+except ImportError as e:
+    st.error(f"Failed to import required modules: {e}")
+    st.info("Please ensure all dependencies are installed and the Python path is configured correctly.")
+    logger.error(f"Import error: {e}\n{traceback.format_exc()}")
+    st.stop()
+
+# Safe import for psutil (optional)
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
 
 # Initialize
 if 'parser' not in st.session_state:
@@ -44,7 +65,7 @@ def main():
         # Setup session state
         setup_session_state()
         
-        # Custom CSS for modern UI
+        # Custom CSS for modern UI (improved for light/dark mode compatibility)
         st.markdown("""
         <style>
         .main-header {
@@ -55,7 +76,7 @@ def main():
             margin-bottom: 2rem;
         }
         .metric-card {
-            background: white;
+            background: var(--background-color);
             padding: 1rem;
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
@@ -65,7 +86,7 @@ def main():
         .risk-medium { border-left-color: #fd7e14 !important; }
         .risk-low { border-left-color: #28a745 !important; }
         .analysis-section {
-            background: #f8f9fa;
+            background: var(--secondary-background-color);
             padding: 1rem;
             border-radius: 8px;
             margin: 1rem 0;
@@ -74,15 +95,12 @@ def main():
             gap: 2px;
         }
         .stTabs [data-baseweb="tab"] {
-            background-color: #f0f2f6;
+            background-color: var(--secondary-background-color);
             border-radius: 8px 8px 0 0;
         }
         .stTabs [aria-selected="true"] {
             background-color: #667eea;
             color: white;
-        }
-        .sidebar .sidebar-content {
-            background: linear-gradient(180deg, #f8f9fa 0%, #e9ecef 100%);
         }
         </style>
         """, unsafe_allow_html=True)
@@ -115,20 +133,36 @@ def main():
             else:
                 enable_geo = st.checkbox("Geographic Analysis", value=True)
                 enable_dns = st.checkbox("DNS Analysis", value=True)
-                enable_reputation = st.checkbox("Reputation Check", value=config.is_api_enabled("abuseipdb"))
+                try:
+                    enable_reputation = st.checkbox("Reputation Check", value=config.is_api_enabled("abuseipdb"))
+                except Exception as e:
+                    logger.debug(f"Config error: {e}")
+                    enable_reputation = st.checkbox("Reputation Check", value=False)
                 enable_blacklist = st.checkbox("Blacklist Check", value=True)
             
             st.divider()
             
-            # API Status
+            # API Status - Fixed to handle missing keys consistently
             st.subheader("🌐 API Status")
-            api_status = api_manager.get_service_status()
-            
-            for service, status in api_status.items():
-                if status['enabled']:
-                    st.success(f"✅ {service.title()}")
-                else:
-                    st.warning(f"⚠️ {service.title()} (Disabled)")
+            try:
+                api_status = api_manager.get_service_status()
+                
+                for service, status in api_status.items():
+                    # Consistent handling - check both enabled and api_key_configured
+                    is_enabled = status.get('enabled', False)
+                    has_api_key = status.get('api_key_configured', False)
+                    
+                    if is_enabled and has_api_key:
+                        st.success(f"✅ {service.title()} (Configured)")
+                    elif is_enabled and not has_api_key:
+                        st.warning(f"⚠️ {service.title()} (No API Key)")
+                    elif is_enabled:
+                        st.success(f"✅ {service.title()} (Enabled)")
+                    else:
+                        st.warning(f"⚠️ {service.title()} (Disabled)")
+            except Exception as e:
+                st.error(f"Error getting API status: {e}")
+                logger.error(f"API status error: {e}\n{traceback.format_exc()}")
             
             # Show API configuration help
             show_api_configuration_help()
@@ -137,14 +171,18 @@ def main():
             
             # Database statistics
             st.subheader("📊 Statistics")
-            stats = database.get_statistics()
-            st.metric("Total Analyses", stats.get("total_analyses", 0))
-            st.metric("Recent (7 days)", stats.get("recent_analyses", 0))
-            
-            if st.button("🧹 Clean Old Records"):
-                database.cleanup_old_records()
-                st.success("Cleanup completed!")
-                st.rerun()
+            try:
+                stats = database.get_statistics()
+                st.metric("Total Analyses", stats.get("total_analyses", 0))
+                st.metric("Recent (7 days)", stats.get("recent_analyses", 0))
+                
+                if st.button("🧹 Clean Old Records"):
+                    database.cleanup_old_records()
+                    st.success("Cleanup completed!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error accessing database: {e}")
+                logger.error(f"Database error: {e}\n{traceback.format_exc()}")
             
             # System status
             show_system_status()
@@ -165,6 +203,10 @@ def main():
             raw_headers = ""
             
             if input_method == "Paste Headers":
+                # Clear sample headers if switching to paste mode
+                if 'sample_headers' in st.session_state:
+                    del st.session_state['sample_headers']
+                
                 raw_headers = st.text_area(
                     "Paste email headers here:",
                     height=200,
@@ -172,27 +214,44 @@ def main():
                 )
             
             elif input_method == "Upload File":
+                # Clear sample headers if switching to upload mode
+                if 'sample_headers' in st.session_state:
+                    del st.session_state['sample_headers']
+                
                 uploaded_file = st.file_uploader(
                     "Choose a file",
                     type=['txt', 'eml', 'msg'],
                     help="Upload a text file containing email headers"
                 )
                 if uploaded_file:
-                    raw_headers = str(uploaded_file.read(), "utf-8")
+                    try:
+                        raw_headers = str(uploaded_file.read(), "utf-8")
+                    except UnicodeDecodeError:
+                        st.error("Error decoding file. Please ensure it's a valid text file.")
+                    except Exception as e:
+                        st.error(f"Error reading file: {e}")
+                        logger.error(f"File upload error: {e}\n{traceback.format_exc()}")
             
             elif input_method == "Load from History":
-                recent_analyses = database.get_recent_analyses(limit=20)
-                if recent_analyses:
-                    selected_analysis = st.selectbox(
-                        "Select from recent analyses:",
-                        options=range(len(recent_analyses)),
-                        format_func=lambda x: f"{recent_analyses[x].from_address} - {recent_analyses[x].subject[:50]}..."
-                    )
-                    if st.button("Load Selected"):
-                        display_analysis_results(recent_analyses[selected_analysis].analysis_results)
-                        return
-                else:
-                    st.info("No recent analyses found.")
+                try:
+                    recent_analyses = database.get_recent_analyses(limit=20)
+                    if recent_analyses:
+                        selected_analysis = st.selectbox(
+                            "Select from recent analyses:",
+                            options=range(len(recent_analyses)),
+                            format_func=lambda x: f"{recent_analyses[x].from_address or 'Unknown'} - {(recent_analyses[x].subject or 'No Subject')[:50]}..."
+                        )
+                        if st.button("Load Selected"):
+                            if recent_analyses[selected_analysis].analysis_results:
+                                display_analysis_results(recent_analyses[selected_analysis].analysis_results)
+                                return
+                            else:
+                                st.error("No analysis results found for selected record")
+                    else:
+                        st.info("No recent analyses found.")
+                except Exception as e:
+                    st.error(f"Error loading history: {e}")
+                    logger.error(f"History loading error: {e}\n{traceback.format_exc()}")
         
         with col2:
             st.subheader("🎯 Quick Actions")
@@ -204,9 +263,15 @@ def main():
                 st.success("Sample headers loaded!")
                 st.rerun()
             
-            if 'sample_headers' in st.session_state:
+            # Use sample headers if available and in paste mode
+            if 'sample_headers' in st.session_state and input_method == "Paste Headers":
                 raw_headers = st.session_state['sample_headers']
                 st.info("Sample headers loaded and ready for analysis")
+                
+                # Clear sample headers button
+                if st.button("🗑️ Clear Sample", use_container_width=True):
+                    del st.session_state['sample_headers']
+                    st.rerun()
             
             # Analysis button
             analyze_button = st.button(
@@ -215,12 +280,6 @@ def main():
                 disabled=not raw_headers.strip(),
                 use_container_width=True
             )
-            
-            # Clear sample headers button
-            if 'sample_headers' in st.session_state:
-                if st.button("🗑️ Clear Sample", use_container_width=True):
-                    del st.session_state['sample_headers']
-                    st.rerun()
         
         # Analysis execution
         if analyze_button and raw_headers.strip():
@@ -234,7 +293,7 @@ def main():
         st.error("🚨 Application Error")
         st.error(f"A critical error occurred: {str(e)}")
         st.info("Please check the application logs and restart if necessary.")
-        logger.error(f"Critical Streamlit application error: {e}", exc_info=True)
+        logger.error(f"Critical Streamlit application error: {e}\n{traceback.format_exc()}")
 
 def setup_session_state():
     """Initialize session state variables"""
@@ -269,7 +328,7 @@ def analyze_headers(raw_headers: str, analysis_mode: str, enable_geo: bool,
             'enable_dns': enable_dns,
             'enable_reputation': enable_reputation,
             'enable_blacklist': enable_blacklist,
-            'analysis_mode': analysis_mode
+            'analysis_mode': analysis_mode.lower().replace(' ', '_')
         }
         
         # Step 2: Perform analysis
@@ -284,11 +343,16 @@ def analyze_headers(raw_headers: str, analysis_mode: str, enable_geo: bool,
         
         # Step 3: Save to database
         status_text.text("💾 Saving results...")
-        record_id = database.save_analysis(
-            raw_headers, 
-            results['parsed_headers'], 
-            results
-        )
+        try:
+            record_id = database.save_analysis(
+                raw_headers, 
+                results.get('parsed_headers', {}), 
+                results
+            )
+            logger.info(f"Analysis saved with ID: {record_id}")
+        except Exception as e:
+            logger.warning(f"Could not save to database: {e}")
+            # Continue without saving
         
         progress_bar.progress(90)
         
@@ -310,7 +374,7 @@ def analyze_headers(raw_headers: str, analysis_mode: str, enable_geo: bool,
         st.error(f"❌ Analysis failed: {str(e)}")
         progress_bar.empty()
         status_text.empty()
-        logger.error(f"Analysis failed: {e}", exc_info=True)
+        logger.error(f"Analysis failed: {e}\n{traceback.format_exc()}")
 
 def display_analysis_results(results: Dict[str, Any]):
     """Display comprehensive analysis results"""
@@ -320,8 +384,13 @@ def display_analysis_results(results: Dict[str, Any]):
     
     # Calculate overall risk
     overall_risk = calculate_overall_risk(results)
-    risk_color = config.get_risk_color(overall_risk)
-    risk_level = config.get_risk_level(overall_risk)
+    try:
+        risk_color = config.get_risk_color(overall_risk)
+        risk_level = config.get_risk_level(overall_risk)
+    except Exception as e:
+        logger.debug(f"Config method error: {e}")
+        risk_color = "#666666"
+        risk_level = "UNKNOWN"
     
     # Risk metrics
     col1, col2, col3, col4 = st.columns(4)
@@ -422,12 +491,16 @@ def display_summary_tab(results: Dict[str, Any], overall_risk: int, risk_level: 
             'Routing': max(0, 100 - len(results.get('routing', {}).get('issues', [])) * 15)
         }
         
-        fig = px.pie(
-            values=list(risk_data.values()),
-            names=list(risk_data.keys()),
-            title="Security Component Scores"
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        try:
+            fig = px.pie(
+                values=list(risk_data.values()),
+                names=list(risk_data.keys()),
+                title="Security Component Scores"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.warning("Could not generate risk chart")
+            logger.debug(f"Chart generation error: {e}")
         
         # Timeline if available
         if 'geographic' in results and 'analysis' in results['geographic']:
@@ -623,8 +696,9 @@ def display_geographic_tab(geo_data: Dict[str, Any], routing_data: Dict[str, Any
                 'Suspicious': '🚨' if hop.get('is_suspicious') else '✅'
             })
         
-        df = pd.DataFrame(hop_data)
-        st.dataframe(df, use_container_width=True)
+        if hop_data:
+            df = pd.DataFrame(hop_data)
+            st.dataframe(df, use_container_width=True)
         
         # Suspicious hops details
         suspicious_hops = routing_data.get('suspicious_hops', [])
@@ -650,64 +724,29 @@ def display_geographic_tab(geo_data: Dict[str, Any], routing_data: Dict[str, Any
                 'Blacklisted': analysis.get('blacklists', {}).get('is_blacklisted', False)
             })
         
-        df = pd.DataFrame(ip_data)
-        
-        # Interactive table
-        st.dataframe(
-            df,
-            use_container_width=True,
-            column_config={
-                'Risk Score': st.column_config.ProgressColumn(
-                    'Risk Score',
-                    help='Risk score from 0-100',
-                    min_value=0,
-                    max_value=100
-                ),
-                'Abuse Confidence': st.column_config.ProgressColumn(
-                    'Abuse Confidence',
-                    help='Abuse confidence percentage',
-                    min_value=0,
-                    max_value=100
-                ),
-                'Blacklisted': st.column_config.CheckboxColumn('Blacklisted')
-            }
-        )
-        
-        # Geographic visualization
-        if len(ip_data) > 0:
-            st.subheader("🗺️ Geographic Distribution")
+        if ip_data:
+            df = pd.DataFrame(ip_data)
             
-            # Create map visualization
-            fig = go.Figure()
-            
-            for ip_info in ip_data:
-                country = ip_info['Country']
-                risk_score = ip_info['Risk Score']
-                
-                # Color based on risk
-                color = 'red' if risk_score > 70 else 'orange' if risk_score > 40 else 'green'
-                
-                # Note: This is a simplified example - in production you'd need actual coordinates
-                fig.add_trace(go.Scattergeo(
-                    lon=[0],  # Would need actual longitude from coordinates
-                    lat=[0],  # Would need actual latitude from coordinates
-                    text=f"{ip_info['IP Address']}<br>{country}<br>Risk: {risk_score}",
-                    mode='markers',
-                    marker=dict(size=10, color=color),
-                    name=ip_info['IP Address']
-                ))
-            
-            fig.update_layout(
-                title="Email Routing Geographic Path",
-                geo=dict(
-                    projection_type='natural earth',
-                    showland=True,
-                    landcolor='rgb(243, 243, 243)',
-                    coastlinecolor='rgb(204, 204, 204)',
-                )
+            # Interactive table
+            st.dataframe(
+                df,
+                use_container_width=True,
+                column_config={
+                    'Risk Score': st.column_config.ProgressColumn(
+                        'Risk Score',
+                        help='Risk score from 0-100',
+                        min_value=0,
+                        max_value=100
+                    ),
+                    'Abuse Confidence': st.column_config.ProgressColumn(
+                        'Abuse Confidence',
+                        help='Abuse confidence percentage',
+                        min_value=0,
+                        max_value=100
+                    ),
+                    'Blacklisted': st.column_config.CheckboxColumn('Blacklisted')
+                }
             )
-            
-            st.plotly_chart(fig, use_container_width=True)
     
     # Risk factors
     if summary.get('risk_factors'):
@@ -765,7 +804,7 @@ def display_spoofing_tab(spoof_data: Dict[str, Any]):
         if display_name:
             st.write(f"**Display Name:** {display_name}")
             
-            if display_spoofing.get('executive_impersonation'):
+            if display_spoofing.get('executive_keywords'):
                 st.error("❌ Potential Executive Impersonation Detected")
             else:
                 st.success("✅ No Executive Impersonation Detected")
@@ -926,7 +965,11 @@ def display_reports_tab(results: Dict[str, Any]):
                 
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 
+                # Fixed: Handle different data types properly for download
                 if report_format == "PDF":
+                    # Ensure we have bytes for PDF
+                    if isinstance(report_data, str):
+                        report_data = report_data.encode('utf-8')
                     st.download_button(
                         label="📥 Download PDF Report",
                         data=report_data,
@@ -935,6 +978,9 @@ def display_reports_tab(results: Dict[str, Any]):
                         key="pdf_download"
                     )
                 elif report_format == "HTML":
+                    # Ensure we have string for HTML
+                    if isinstance(report_data, bytes):
+                        report_data = report_data.decode('utf-8')
                     st.download_button(
                         label="📥 Download HTML Report",
                         data=report_data,
@@ -943,9 +989,11 @@ def display_reports_tab(results: Dict[str, Any]):
                         key="html_download"
                     )
                 elif report_format == "JSON":
+                    # Generate JSON from results
+                    json_data = json.dumps(results, indent=2, default=str)
                     st.download_button(
                         label="📥 Download JSON Report",
-                        data=json.dumps(results, indent=2, default=str),
+                        data=json_data,
                         file_name=f"email_analysis_{timestamp}.json",
                         mime="application/json",
                         key="json_download"
@@ -964,7 +1012,7 @@ def display_reports_tab(results: Dict[str, Any]):
                 
             except Exception as e:
                 st.error(f"❌ Report generation failed: {str(e)}")
-                logger.error(f"Report generation error: {e}", exc_info=True)
+                logger.error(f"Report generation error: {e}\n{traceback.format_exc()}")
     
     with col2:
         st.markdown("### 📋 Report Preview")
@@ -973,10 +1021,16 @@ def display_reports_tab(results: Dict[str, Any]):
         summary_data = {
             "Analysis Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "Overall Risk Score": calculate_overall_risk(results),
-            "Risk Level": config.get_risk_level(calculate_overall_risk(results)),
             "Authentication Score": results.get('authentication', {}).get('overall_score', 0),
             "Issues Found": sum(len(section.get('issues', [])) for section in results.values() if isinstance(section, dict))
         }
+        
+        try:
+            risk_level = config.get_risk_level(calculate_overall_risk(results))
+            summary_data["Risk Level"] = risk_level
+        except Exception as e:
+            logger.debug(f"Config method error: {e}")
+            summary_data["Risk Level"] = "UNKNOWN"
         
         for key, value in summary_data.items():
             st.write(f"**{key}:** {value}")
@@ -992,37 +1046,41 @@ def display_historical_section():
     with hist_tab1:
         st.markdown("### 🕐 Recent Analyses")
         
-        recent_analyses = database.get_recent_analyses(limit=10)
-        if recent_analyses:
-            # Create DataFrame for display
-            hist_data = []
-            for analysis in recent_analyses:
-                hist_data.append({
-                    'Date': analysis.timestamp.strftime('%Y-%m-%d %H:%M') if analysis.timestamp else 'Unknown',
-                    'From': analysis.from_address or 'Unknown',
-                    'Subject': analysis.subject[:50] + '...' if analysis.subject and len(analysis.subject) > 50 else analysis.subject or 'No Subject',
-                    'Risk Level': analysis.risk_level or 'Unknown',
-                    'Risk Score': analysis.risk_score or 0
-                })
-            
-            df = pd.DataFrame(hist_data)
-            
-            # Display with color coding
-            def highlight_risk(row):
-                if row['Risk Level'] == 'HIGH':
-                    return ['background-color: #ffebee'] * len(row)
-                elif row['Risk Level'] == 'MEDIUM':
-                    return ['background-color: #fff3e0'] * len(row)
-                elif row['Risk Level'] == 'LOW':
-                    return ['background-color: #e8f5e8'] * len(row)
-                return [''] * len(row)
-            
-            st.dataframe(
-                df.style.apply(highlight_risk, axis=1),
-                use_container_width=True
-            )
-        else:
-            st.info("No historical analyses found.")
+        try:
+            recent_analyses = database.get_recent_analyses(limit=10)
+            if recent_analyses:
+                # Create DataFrame for display
+                hist_data = []
+                for analysis in recent_analyses:
+                    hist_data.append({
+                        'Date': analysis.timestamp.strftime('%Y-%m-%d %H:%M') if analysis.timestamp else 'Unknown',
+                        'From': analysis.from_address or 'Unknown',
+                        'Subject': analysis.subject[:50] + '...' if analysis.subject and len(analysis.subject) > 50 else analysis.subject or 'No Subject',
+                        'Risk Level': analysis.risk_level or 'Unknown',
+                        'Risk Score': analysis.risk_score or 0
+                    })
+                
+                df = pd.DataFrame(hist_data)
+                
+                # Display with improved color coding for light/dark mode
+                def highlight_risk(row):
+                    if row['Risk Level'] == 'HIGH':
+                        return ['background-color: rgba(220, 53, 69, 0.1)'] * len(row)
+                    elif row['Risk Level'] == 'MEDIUM':
+                        return ['background-color: rgba(253, 126, 20, 0.1)'] * len(row)
+                    elif row['Risk Level'] == 'LOW':
+                        return ['background-color: rgba(40, 167, 69, 0.1)'] * len(row)
+                    return [''] * len(row)
+                
+                st.dataframe(
+                    df.style.apply(highlight_risk, axis=1),
+                    use_container_width=True
+                )
+            else:
+                st.info("No historical analyses found.")
+        except Exception as e:
+            st.error(f"Error loading historical data: {e}")
+            logger.error(f"Historical data error: {e}\n{traceback.format_exc()}")
     
     with hist_tab2:
         st.markdown("### 🔍 Search Analysis History")
@@ -1037,77 +1095,101 @@ def display_historical_section():
             risk_filter = st.selectbox("Risk Level", ["All", "HIGH", "MEDIUM", "LOW"])
         
         with col3:
+            # Fixed: Handle date range properly
             date_range = st.date_input(
                 "Date Range",
-                value=(datetime.now() - timedelta(days=30), datetime.now()),
-                max_value=datetime.now()
+                value=(datetime.now().date() - timedelta(days=30), datetime.now().date()),
+                max_value=datetime.now().date()
             )
         
         if st.button("🔍 Search"):
             if search_from:
-                search_results = database.get_analyses_by_sender(search_from)
-                if search_results:
-                    st.success(f"Found {len(search_results)} analyses for {search_from}")
-                    
-                    # Display search results
-                    search_data = []
-                    for analysis in search_results:
-                        if risk_filter != "All" and analysis.risk_level != risk_filter:
-                            continue
-                        if isinstance(date_range, tuple) and len(date_range) == 2:
-                            start_date, end_date = date_range
-                            if analysis.timestamp:
-                                if not (start_date <= analysis.timestamp.date() <= end_date):
-                                    continue
-                        search_data.append({
-                            'Date': analysis.timestamp.strftime('%Y-%m-%d %H:%M') if analysis.timestamp else 'Unknown',
-                            'Subject': analysis.subject[:50] + '...' if analysis.subject and len(analysis.subject) > 50 else analysis.subject or 'No Subject',
-                            'Risk Level': analysis.risk_level or 'Unknown',
-                            'Risk Score': analysis.risk_score or 0
-                        })
-                    
-                    if search_data:
-                        search_df = pd.DataFrame(search_data)
-                        st.dataframe(search_df, use_container_width=True)
+                try:
+                    search_results = database.get_analyses_by_sender(search_from)
+                    if search_results:
+                        st.success(f"Found {len(search_results)} analyses for {search_from}")
+                        
+                        # Display search results
+                        search_data = []
+                        for analysis in search_results:
+                            # Filter by risk level
+                            if risk_filter != "All" and analysis.risk_level != risk_filter:
+                                continue
+                            
+                            # Fixed: Handle date range properly - check if it's a tuple or single date
+                            if isinstance(date_range, tuple) and len(date_range) == 2:
+                                start_date, end_date = date_range
+                                if analysis.timestamp:
+                                    analysis_date = analysis.timestamp.date()
+                                    if not (start_date <= analysis_date <= end_date):
+                                        continue
+                            elif isinstance(date_range, date):
+                                # Single date selected
+                                if analysis.timestamp:
+                                    analysis_date = analysis.timestamp.date()
+                                    if analysis_date != date_range:
+                                        continue
+                            
+                            search_data.append({
+                                'Date': analysis.timestamp.strftime('%Y-%m-%d %H:%M') if analysis.timestamp else 'Unknown',
+                                'Subject': analysis.subject[:50] + '...' if analysis.subject and len(analysis.subject) > 50 else analysis.subject or 'No Subject',
+                                'Risk Level': analysis.risk_level or 'Unknown',
+                                'Risk Score': analysis.risk_score or 0
+                            })
+                        
+                        if search_data:
+                            search_df = pd.DataFrame(search_data)
+                            st.dataframe(search_df, use_container_width=True)
+                        else:
+                            st.info("No analyses found for the specified criteria.")
                     else:
-                        st.info("No analyses found for the specified criteria.")
-                else:
-                    st.info("No analyses found for the specified sender.")
+                        st.info("No analyses found for the specified sender.")
+                except Exception as e:
+                    st.error(f"Search error: {e}")
+                    logger.error(f"Search error: {e}\n{traceback.format_exc()}")
             else:
                 st.warning("Please enter a sender address to search.")
     
     with hist_tab3:
         st.markdown("### 📊 Analysis Statistics")
         
-        stats = database.get_statistics()
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("Total Analyses", stats.get("total_analyses", 0))
-            st.metric("Recent (7 days)", stats.get("recent_analyses", 0))
-        
-        with col2:
-            st.metric("Cached IPs", stats.get("cached_ips", 0))
-            st.metric("Cached Domains", stats.get("cached_domains", 0))
-        
-        with col3:
-            # Risk distribution chart
-            risk_dist = stats.get("risk_distribution", {})
-            if risk_dist:
-                fig = px.pie(
-                    values=list(risk_dist.values()),
-                    names=list(risk_dist.keys()),
-                    title="Risk Level Distribution",
-                    color_discrete_map={
-                        'HIGH': '#dc3545',
-                        'MEDIUM': '#fd7e14', 
-                        'LOW': '#28a745'
-                    }
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("No risk distribution data available yet.")
+        try:
+            stats = database.get_statistics()
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Total Analyses", stats.get("total_analyses", 0))
+                st.metric("Recent (7 days)", stats.get("recent_analyses", 0))
+            
+            with col2:
+                st.metric("Cached IPs", stats.get("cached_ips", 0))
+                st.metric("Cached Domains", stats.get("cached_domains", 0))
+            
+            with col3:
+                # Risk distribution chart
+                risk_dist = stats.get("risk_distribution", {})
+                if risk_dist:
+                    try:
+                        fig = px.pie(
+                            values=list(risk_dist.values()),
+                            names=list(risk_dist.keys()),
+                            title="Risk Level Distribution",
+                            color_discrete_map={
+                                'HIGH': '#dc3545',
+                                'MEDIUM': '#fd7e14', 
+                                'LOW': '#28a745'
+                            }
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    except Exception as e:
+                        st.warning("Could not generate risk distribution chart")
+                        logger.debug(f"Chart error: {e}")
+                else:
+                    st.info("No risk distribution data available yet.")
+        except Exception as e:
+            st.error(f"Error loading statistics: {e}")
+            logger.error(f"Statistics error: {e}\n{traceback.format_exc()}")
 
 def calculate_overall_risk(results: Dict[str, Any]) -> int:
     """Calculate overall risk score from analysis results"""
@@ -1152,7 +1234,13 @@ def convert_results_to_csv(results: Dict[str, Any]) -> str:
     output.write("Overall Analysis\n")
     output.write("Metric,Value\n")
     output.write(f"Overall Risk Score,{calculate_overall_risk(results)}\n")
-    output.write(f"Risk Level,{config.get_risk_level(calculate_overall_risk(results))}\n")
+    
+    try:
+        risk_level = config.get_risk_level(calculate_overall_risk(results))
+        output.write(f"Risk Level,{risk_level}\n")
+    except Exception as e:
+        logger.debug(f"Config error in CSV: {e}")
+        output.write(f"Risk Level,UNKNOWN\n")
     
     # Authentication data
     auth_data = results.get('authentication', {})
@@ -1190,13 +1278,13 @@ def convert_results_to_csv(results: Dict[str, Any]) -> str:
         output.write("\nCritical Issues\n")
         output.write("Issue\n")
         for issue in summary["critical_issues"]:
-            output.write(f"{issue}\n")
+            output.write(f'"{issue}"\n')  # Quote issues to handle commas
     
     if summary.get("recommendations"):
         output.write("\nRecommendations\n")
         output.write("Recommendation\n")
         for rec in summary["recommendations"]:
-            output.write(f"{rec}\n")
+            output.write(f'"{rec}"\n')  # Quote recommendations to handle commas
     
     return output.getvalue()
 
@@ -1237,7 +1325,7 @@ def show_api_configuration_help():
         """)
 
 def show_system_status():
-    """Show system status information"""
+    """Show system status information - Fixed to handle missing keys properly"""
     with st.expander("🖥️ System Status"):
         # Database status
         try:
@@ -1246,26 +1334,43 @@ def show_system_status():
             st.write(f"**Records:** {stats.get('total_analyses', 0)}")
         except Exception as e:
             st.write(f"**Database:** ❌ Error - {str(e)}")
+            logger.error(f"Database status error: {e}\n{traceback.format_exc()}")
         
-        # API status
-        api_status = api_manager.get_service_status()
-        for service, status in api_status.items():
-            if status['api_key_configured']:
-                st.write(f"**{service.title()}:** ✅ Configured")
-            else:
-                st.write(f"**{service.title()}:** ⚠️ No API key")
+        # API status - Fixed to handle dictionary structure properly
+        try:
+            api_status = api_manager.get_service_status()
+            for service, status in api_status.items():
+                # Safe access to dictionary keys with defaults
+                is_enabled = status.get('enabled', False)
+                has_api_key = status.get('api_key_configured', False)
+                
+                if is_enabled and has_api_key:
+                    st.write(f"**{service.title()}:** ✅ Configured")
+                elif is_enabled and not has_api_key:
+                    st.write(f"**{service.title()}:** ⚠️ No API key")
+                elif is_enabled:
+                    st.write(f"**{service.title()}:** ✅ Enabled")
+                else:
+                    st.write(f"**{service.title()}:** ❌ Disabled")
+        except Exception as e:
+            st.write(f"**API Status:** ❌ Error - {str(e)}")
+            logger.error(f"API status error: {e}\n{traceback.format_exc()}")
         
         # Memory usage
-        try:
-            memory = psutil.virtual_memory()
-            st.write(f"**Memory:** {memory.percent}% used")
-        except ImportError:
-            st.warning("⚠️ psutil not installed - memory usage unavailable")
+        if PSUTIL_AVAILABLE:
+            try:
+                memory = psutil.virtual_memory()
+                st.write(f"**Memory:** {memory.percent:.1f}% used")
+            except Exception as e:
+                st.write(f"**Memory:** ❌ Error - {str(e)}")
+                logger.debug(f"Memory status error: {e}")
+        else:
+            st.write("**Memory:** ⚠️ psutil not available")
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
         st.error(f"Failed to start application: {str(e)}")
-        logger.error(f"Application startup failed: {e}", exc_info=True)
-        sys.exit(1)
+        logger.error(f"Application startup failed: {e}\n{traceback.format_exc()}")
+        # Don't call sys.exit() in Streamlit as it can cause issues

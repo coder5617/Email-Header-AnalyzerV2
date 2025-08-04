@@ -4,7 +4,7 @@ plotly>=6.2,<7.0
 
 # Data processing and analysis
 pandas>=2.3,<3.0
-numpy>=1.24,<2.0
+numpy>=2.0,<3.0
 
 # Network and DNS
 dnspython>=2.7,<3.0
